@@ -43,8 +43,11 @@ if (!n) {
   process.exit(1);
 }
 
-const { renameSync } = await import('node:fs');
+const { renameSync, rmSync } = await import('node:fs');
 renameSync(tmpPath, dbPath);
+// WAL 모드 DB를 열면 -shm/-wal 곁 파일이 생긴다. 임시 이름으로 남으면
+// 캐시 디렉터리에 쓰레기가 쌓이므로 함께 지운다.
+for (const ext of ['-shm', '-wal']) rmSync(`${tmpPath}${ext}`, { force: true });
 writeFileSync(join(cacheDir, 'NOTICE.txt'), `출처: https://rule.smu.ac.kr\n수집: ${built ?? '미상'}\n규정 데이터의 저작권은 상명대학교에 있습니다.\n`);
 
 console.error(`완료: ${dbPath} (규정 ${n}건, 수집 ${built ?? '미상'})`);
