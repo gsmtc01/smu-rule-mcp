@@ -24,9 +24,9 @@ const jitter = (max: number) => Math.floor(Math.random() * max);
 export interface FetchOptions {
   /** EUC-KR로 인코딩이 끝난 폼 본문. 생략하면 GET. */
   body?: string;
-  /** 전문·첨부처럼 무거운 응답이면 true — 더 긴 지연을 적용한다. */
+  /** 전문·첨부처럼 무거운 응답이면 true. 더 긴 지연을 적용한다. */
   heavy?: boolean;
-  /** 바이너리(HWP 등) 응답이면 true — 디코딩하지 않고 Buffer로 돌려준다. */
+  /** 바이너리(HWP 등) 응답이면 true. 디코딩하지 않고 Buffer로 돌려준다. */
   binary?: boolean;
   headers?: Record<string, string>;
 }
@@ -136,7 +136,7 @@ export class PoliteFetcher {
           const ra = Number(res.headers.get('retry-after'));
           const waitMs = Number.isFinite(ra) && ra > 0 ? ra * 1_000 : RETRY.rateLimitedFallbackMs;
           this.consecutiveFailures++;
-          lastError = new Error(`HTTP ${res.status} — ${waitMs}ms 대기 후 재시도`);
+          lastError = new Error(`HTTP ${res.status}, ${waitMs}ms 대기 후 재시도`);
           await sleep(waitMs);
           continue;
         }
@@ -167,6 +167,6 @@ export class PoliteFetcher {
       this.guard();
     }
 
-    throw new Error(`요청 실패 (${RETRY.maxAttempts}회 시도): ${url} — ${String(lastError)}`);
+    throw new Error(`요청 실패 (${RETRY.maxAttempts}회 시도): ${url} / ${String(lastError)}`);
   }
 }

@@ -19,7 +19,7 @@ const MIN = {
 };
 
 if (!existsSync(DB_PATH)) {
-  console.error(`검증 실패: DB가 없습니다 — ${DB_PATH}`);
+  console.error(`검증 실패: DB가 없습니다 (${DB_PATH})`);
   process.exit(1);
 }
 
@@ -49,7 +49,7 @@ for (const [k, min] of Object.entries(MIN)) {
 
 // 조문과 FTS 인덱스는 항상 1:1이어야 한다. 어긋나면 검색이 조용히 부정확해진다.
 if (stats.articles !== stats.fts) {
-  errors.push(`articles(${stats.articles}) != articles_fts(${stats.fts}) — 인덱스 불일치`);
+  errors.push(`인덱스 불일치: articles(${stats.articles}) != articles_fts(${stats.fts})`);
 }
 
 // 직전 배포본과 비교 (환경변수로 이전 건수를 넘겨준 경우에만).

@@ -82,7 +82,7 @@ jobs:
           if [ "${{ steps.restore.outcome }}" = "success" ]; then
             echo "증분 수집 (기존 규정 ${PREV_REGULATION_COUNT:-?}건)"
           else
-            echo "이전 배포본 없음 — 전체 수집으로 진행"
+            echo "이전 배포본 없음. 전체 수집으로 진행"
             rm -f "$SMU_DB_PATH"
           fi
 
@@ -138,7 +138,7 @@ jobs:
           {
             echo "### 수집 결과"
             if [ "${{ steps.crawl.outputs.skipped }}" = "true" ]; then
-              echo "- 수집기 자체 중단 — 배포 건너뜀"
+              echo "- 수집기 자체 중단. 배포 건너뜀"
             else
               echo "- 상태: ${{ job.status }}"
               echo "- 이전 규정 수: ${PREV_REGULATION_COUNT:-없음}"

@@ -6,7 +6,7 @@ import type { PoliteFetcher } from './politeFetch.js';
  *
  * 웹 UI는 진입 시 초기화 호출을 수행하며, 파일 첨부 조회 등 일부 기능은
  * 초기화된 세션을 전제로 동작한다. 배치 실행에서는 세션을 1회만 만들어
- * 실행 내내 재사용한다 — 매 요청 재초기화는 요청 수를 2배로 만든다.
+ * 실행 내내 재사용한다. 매 요청 재초기화는 요청 수를 2배로 만든다.
  */
 
 export interface Session {

@@ -51,7 +51,7 @@ export const TIMEOUT = {
 } as const;
 
 export const RETRY = {
-  /** 4xx는 재시도하지 않는다 — 동일 요청을 반복해봐야 낭비다. */
+  /** 4xx는 재시도하지 않는다. 동일 요청을 반복해봐야 낭비다. */
   retryOn: ['network', 'timeout', '5xx'] as const,
   maxAttempts: 3,
   /** 지수 백오프(ms). 각 대기에 0~1000ms 지터를 더한다. */

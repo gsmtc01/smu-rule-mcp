@@ -190,11 +190,11 @@ async function main(): Promise<void> {
         n = replaceArticles(db, r.bookid, r.title, html);
       });
       done++;
-      log(`  [${done}/${targets.length}] ${r.title} — 조문 ${n}`);
+      log(`  [${done}/${targets.length}] ${r.title} (조문 ${n})`);
     } catch (err) {
       if (err instanceof CrawlAbort) throw err;
       // 개별 실패는 건너뛴다. 다음 실행에서 다시 대상이 된다.
-      log(`  ! 실패: ${r.title} (${r.bookid}) — ${String(err)}`);
+      log(`  ! 실패: ${r.title} (${r.bookid}): ${String(err)}`);
     }
   }
 
