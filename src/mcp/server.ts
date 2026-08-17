@@ -46,6 +46,13 @@ function fmtRegulation(r: Regulation): string {
   ].join('\n');
 }
 
+/**
+ * 서버 인스턴스를 만든다.
+ *
+ * HTTP(stateless) 모드에서는 요청마다 새 인스턴스와 트랜스포트가 필요하다.
+ * 하나를 재사용하면 첫 응답 뒤 트랜스포트가 닫혀 이후 요청이 조용히 실패한다.
+ */
+function buildServer(): McpServer {
 const server = new McpServer({ name: 'smu-rule-mcp', version: '0.1.0' });
 
 server.registerTool(
@@ -312,5 +319,55 @@ server.registerTool(
   },
 );
 
-const transport = new StdioServerTransport();
-await server.connect(transport);
+  return server;
+}
+
+/**
+ * 트랜스포트 선택.
+ *
+ * 기본은 stdio다. 데스크톱 앱·CLI처럼 프로세스를 직접 띄우는 클라이언트가 쓴다.
+ * PORT가 지정되면 Streamable HTTP로 뜬다. claude.ai나 ChatGPT처럼 브라우저에서
+ * 쓰는 클라이언트는 로컬 프로세스를 띄울 수 없어 접근 가능한 URL이 필요하다.
+ */
+const port = Number(process.env.PORT ?? 0);
+
+if (port > 0) {
+  const { StreamableHTTPServerTransport } = await import(
+    '@modelcontextprotocol/sdk/server/streamableHttp.js'
+  );
+  const { createServer } = await import('node:http');
+
+  createServer((req, res) => {
+    if (req.url?.startsWith('/health')) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, name: 'smu-rule-mcp' }));
+      return;
+    }
+    const chunks: Buffer[] = [];
+    req.on('data', (c) => chunks.push(c as Buffer));
+    req.on('end', () => {
+      let body: unknown;
+      try {
+        body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : undefined;
+      } catch {
+        body = undefined;
+      }
+      void (async () => {
+        // 요청마다 새로 만들고 끝나면 정리한다(상태 없는 처리).
+        const s = buildServer();
+        const t = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+        res.on('close', () => {
+          void t.close();
+          void s.close();
+        });
+        await s.connect(t);
+        await t.handleRequest(req, res, body);
+      })();
+    });
+  }).listen(port, () => {
+    console.error(`smu-rule-mcp: http://localhost:${port} (Streamable HTTP)`);
+  });
+} else {
+  const transport = new StdioServerTransport();
+  await buildServer().connect(transport);
+}

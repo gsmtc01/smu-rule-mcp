@@ -22,7 +22,9 @@
     "crawl": "node --enable-source-maps dist/crawler/buildDb.js",
     "start": "node dist/mcp/server.js",
     "typecheck": "tsc --noEmit",
-    "update-data": "node scripts/updateData.mjs"
+    "update-data": "node scripts/updateData.mjs",
+    "setup": "node scripts/setup.mjs",
+    "check-filenames": "node scripts/checkFilenames.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",

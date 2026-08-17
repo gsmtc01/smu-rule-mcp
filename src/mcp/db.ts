@@ -10,7 +10,14 @@ import { DatabaseSync } from 'node:sqlite';
  * 원본 접속이 필요한 것은 별표 파일 내려받기뿐이다(Phase 4).
  */
 
-export const DEFAULT_CACHE_DIR = join(homedir(), '.cache', 'smu-rule-mcp');
+/**
+ * 캐시 위치. Windows는 %LOCALAPPDATA%가 관례이므로 그쪽을 따른다.
+ * scripts/updateData.mjs도 같은 규칙을 쓴다. 한쪽만 바꾸면 서로 다른 곳을 본다.
+ */
+export const DEFAULT_CACHE_DIR =
+  process.platform === 'win32' && process.env.LOCALAPPDATA
+    ? join(process.env.LOCALAPPDATA, 'smu-rule-mcp')
+    : join(homedir(), '.cache', 'smu-rule-mcp');
 
 export function resolveDbPath(): string {
   if (process.env.SMU_DB_PATH) return resolve(process.env.SMU_DB_PATH);

@@ -17,7 +17,12 @@ const TAG = process.env.SMU_DATA_TAG ?? 'data-latest';
 const ASSET = 'smu-rule.sqlite.gz';
 const URL_ = process.env.SMU_DATA_URL ?? `https://github.com/${REPO}/releases/download/${TAG}/${ASSET}`;
 
-const cacheDir = process.env.SMU_CACHE_DIR ?? join(homedir(), '.cache', 'smu-rule-mcp');
+// src/mcp/db.ts의 DEFAULT_CACHE_DIR과 같은 규칙을 쓴다. 한쪽만 바꾸면 서로 다른 곳을 본다.
+const defaultCacheDir =
+  process.platform === 'win32' && process.env.LOCALAPPDATA
+    ? join(process.env.LOCALAPPDATA, 'smu-rule-mcp')
+    : join(homedir(), '.cache', 'smu-rule-mcp');
+const cacheDir = process.env.SMU_CACHE_DIR ?? defaultCacheDir;
 const dbPath = join(cacheDir, 'smu-rule.sqlite');
 const tmpPath = `${dbPath}.tmp`;
 
