@@ -1,0 +1,146 @@
+name: crawl
+
+# 야간 수집 → 검증 → Release 배포.
+#
+# 02:00 KST = 17:00 UTC. GitHub의 예약 실행은 수십 분 지연될 수 있으나,
+# 수집 허용 시간대가 KST 02–05시라 3시간의 여유가 있다.
+# 지연이 그 범위를 넘으면 수집기가 스스로 중단한다(exit 2).
+on:
+  schedule:
+    - cron: '0 17 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: '수집 허용 시간대(KST 02–05시) 밖에서도 실행'
+        type: boolean
+        default: false
+
+# 이전 실행이 끝나기 전에 겹쳐 돌지 않게 한다. 동시 수집은 원본에 대한 부하를 배가한다.
+concurrency:
+  group: crawl
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  crawl:
+    # 저장소 변수 SMU_CRAWLER_DISABLED = 'true' 이면 수집을 중단한다(킬 스위치).
+    if: vars.SMU_CRAWLER_DISABLED != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+      DATA_TAG: data-latest
+      SMU_DB_PATH: data/smu-rule.sqlite
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24' # node:sqlite를 플래그 없이 사용
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+
+      # node:sqlite는 버전에 따라 플래그가 필요했다. 수집을 시작하기 전에
+      # 빠르게 확인해, 20분을 쓴 뒤에 실패하는 상황을 막는다.
+      - name: 런타임 점검
+        run: |
+          node -e "
+            const { DatabaseSync } = require('node:sqlite');
+            const db = new DatabaseSync(':memory:');
+            db.exec(\"CREATE VIRTUAL TABLE t USING fts5(b, tokenize='trigram')\");
+            console.log('node:sqlite + FTS5(trigram) 사용 가능:', process.version);
+          "
+
+      # 직전 배포본을 복원한다. 이것이 없으면 매 실행이 전체 재수집이 되어
+      # 수집 정책에 어긋난다. 첫 실행에서는 실패해도 정상이다.
+      - name: 이전 DB 복원
+        id: restore
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          mkdir -p data
+          gh release download "$DATA_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern 'smu-rule.sqlite.gz' \
+            --output prev.sqlite.gz
+          gunzip -c prev.sqlite.gz > "$SMU_DB_PATH"
+          # 내려받은 파일이 실제로 열리는지 확인한 뒤에만 증분으로 취급한다.
+          count=$(node -e "
+            const { DatabaseSync } = require('node:sqlite');
+            const db = new DatabaseSync(process.env.SMU_DB_PATH);
+            console.log(db.prepare('SELECT COUNT(*) AS n FROM regulations').get().n);
+          ")
+          echo "PREV_REGULATION_COUNT=$count" >> "$GITHUB_ENV"
+
+      - name: 복원 결과
+        run: |
+          if [ "${{ steps.restore.outcome }}" = "success" ]; then
+            echo "증분 수집 (기존 규정 ${PREV_REGULATION_COUNT:-?}건)"
+          else
+            echo "이전 배포본 없음 — 전체 수집으로 진행"
+            rm -f "$SMU_DB_PATH"
+          fi
+
+      - name: 수집
+        id: crawl
+        run: |
+          set +e
+          # npm 래퍼를 거치면 종료코드가 그대로 전달된다는 보장이 없다.
+          # 아래 exit 2 분기가 이 값에 의존하므로 node를 직접 호출한다.
+          node --enable-source-maps dist/crawler/buildDb.js ${{ inputs.force && '--force' || '' }}
+          code=$?
+          set -e
+          # exit 2 = 수집기의 자체 중단(시간대 밖, 킬 스위치, 서킷 브레이커).
+          # 비정상이 아니므로 워크플로를 실패시키지 않고 배포만 건너뛴다.
+          if [ $code -eq 2 ]; then
+            echo "skipped=true" >> "$GITHUB_OUTPUT"
+            echo "수집기가 스스로 중단했습니다. 배포를 건너뜁니다."
+            exit 0
+          fi
+          exit $code
+
+      - name: 검증
+        if: steps.crawl.outputs.skipped != 'true'
+        run: node scripts/verifyDb.mjs
+
+      - name: 압축
+        if: steps.crawl.outputs.skipped != 'true'
+        run: |
+          gzip -9 -c "$SMU_DB_PATH" > smu-rule.sqlite.gz
+          ls -lh smu-rule.sqlite.gz
+
+      # 데이터에는 항상 고지를 함께 첨부한다(NOTICE.md §2).
+      - name: Release 배포
+        if: steps.crawl.outputs.skipped != 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.DATA_TAG }}
+          name: 규정 데이터 (최신)
+          body: |
+            상명대학교 규정 데이터의 자동 수집 결과입니다.
+            빌드 시각: ${{ github.run_id }} / ${{ github.sha }}
+
+            **이 데이터의 저작권은 상명대학교에 있으며, 저장소 소스코드의
+            MIT 라이선스가 적용되지 않습니다.** 함께 첨부된 NOTICE.md를
+            반드시 확인하십시오.
+          files: |
+            smu-rule.sqlite.gz
+            NOTICE.md
+
+      - name: 요약
+        if: always()
+        run: |
+          {
+            echo "### 수집 결과"
+            if [ "${{ steps.crawl.outputs.skipped }}" = "true" ]; then
+              echo "- 수집기 자체 중단 — 배포 건너뜀"
+            else
+              echo "- 상태: ${{ job.status }}"
+              echo "- 이전 규정 수: ${PREV_REGULATION_COUNT:-없음}"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
