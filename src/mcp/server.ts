@@ -245,14 +245,18 @@ server.registerTool(
   {
     title: '별표·서식 파일 내려받기',
     description:
-      '별표·서식 HWP 파일을 내려받아 로컬에 저장하고 경로를 돌려준다. ' +
+      '별표·서식 HWP 파일을 내려받아 원래 파일명으로 저장하고 경로를 돌려준다. ' +
       'serverfile은 list_forms 결과에 포함되어 있다. ' +
       '이 도구만 원본 시스템에 접속하며, 받은 파일은 영구 캐시되어 재요청 시 다시 받지 않는다.',
     inputSchema: {
       serverfile: z.string().describe('서버 파일 ID (예: 110294380.hwp)'),
+      output_dir: z
+        .string()
+        .optional()
+        .describe('저장할 디렉터리. 생략하면 사용자가 접근 가능한 기본 위치에 저장한다.'),
     },
   },
-  async ({ serverfile }) => {
+  async ({ serverfile, output_dir }) => {
     const row = asRow<{ serverfile: string; pcfilename: string; title: string | null }>(
       db
         .prepare('SELECT serverfile, pcfilename, title FROM forms WHERE serverfile = ?')
@@ -265,15 +269,17 @@ server.registerTool(
     }
 
     try {
-      const r = await fetchFormFile(row.serverfile, row.pcfilename);
+      const r = await fetchFormFile(row.serverfile, row.pcfilename, output_dir);
       return text(
         [
           `${row.pcfilename}`,
           `  규정: ${row.title ?? '-'}`,
-          `  저장: ${r.path}`,
+          `  저장 위치: ${r.path}`,
           `  크기: ${(r.bytes / 1024).toFixed(1)} KB${r.cached ? ' (캐시됨, 원본 접속 없음)' : ''}`,
           '',
-          '한글(HWP) 파일입니다. 저작권은 상명대학교에 있습니다.',
+          '한글(HWP) 파일입니다. 위 경로에서 바로 열 수 있습니다.',
+          '다른 위치에 두려면 output_dir을 지정하세요.',
+          '저작권은 상명대학교에 있습니다.',
         ].join('\n'),
       );
     } catch (err) {
