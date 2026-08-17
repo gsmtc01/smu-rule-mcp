@@ -40,20 +40,17 @@ MCP 설정은 시작할 때만 읽습니다.
 
 ## 클라이언트별 설정
 
-MCP 연결 방식은 크게 둘로 나뉩니다.
+이 서버는 내 PC에서 도는 **로컬(stdio)** 방식입니다. 클라이언트가 필요할 때
+프로세스를 띄워 쓰므로 별도의 서버나 계정이 필요 없습니다.
 
-- **로컬(stdio)**: 클라이언트가 이 서버를 직접 프로세스로 띄웁니다. 설치만 하면 됩니다.
-- **원격(HTTP)**: 브라우저에서 쓰는 클라이언트는 로컬 프로세스를 띄울 수 없어,
-  접근 가능한 URL이 필요합니다.
-
-| 클라이언트 | 방식 | 준비물 |
+| 클라이언트 | 지원 | 준비물 |
 |---|---|---|
-| Claude Desktop | 로컬 stdio | `npm run setup` |
-| Claude Code | 로컬 stdio | `npm run setup` |
-| Codex CLI | 로컬 stdio | `npm run setup -- --print` 후 TOML 작성 |
-| Cursor / Windsurf 등 | 로컬 stdio | `npm run setup` |
-| Claude 웹(claude.ai) | 원격 HTTP | 서버를 배포하거나 터널 필요 |
-| ChatGPT 웹 / Work | 원격 HTTP | 서버를 배포하거나 터널 필요 |
+| Claude Desktop | 지원 | `npm run setup` |
+| Claude Code | 지원 | `npm run setup` |
+| Codex CLI | 지원 | `npm run setup -- --print` 후 TOML 작성 |
+| Cursor / Windsurf 등 | 지원 | `npm run setup` |
+| Claude 웹(claude.ai) | 미지원 | 아래 참고 |
+| ChatGPT (웹·데스크톱 앱·Work) | 미지원 | 아래 참고 |
 
 ### Claude Desktop
 
@@ -112,33 +109,26 @@ npm run setup -- --client cursor
 `mcpServers` 형식을 쓰는 클라이언트라면 위 Claude Desktop과 같은 JSON을
 각자의 설정 파일에 넣으면 됩니다.
 
-### Claude 웹(claude.ai) · ChatGPT 웹/Work
+### ChatGPT (웹 · 데스크톱 앱 · Work)
 
-브라우저에서 도는 클라이언트는 내 PC의 프로그램을 실행할 수 없습니다.
-**서버가 인터넷에서 접근 가능한 주소로 떠 있어야** 커넥터로 등록할 수 있습니다.
+**현재 사용할 수 없습니다.**
 
-이 서버는 `PORT`를 주면 Streamable HTTP로 뜹니다.
+ChatGPT는 데스크톱 앱을 포함해 **원격 MCP 서버(HTTPS 주소)만** 지원하고,
+내 PC에서 도는 로컬 stdio 서버는 지원하지 않습니다. 커넥터 개발자 모드에
+등록하려면 인터넷에서 접근 가능한 주소가 필요한데, 이 프로젝트는 공용 서버를
+운영하지 않습니다.
 
-```bash
-PORT=8080 npm start          # http://localhost:8080/mcp
-```
+같은 이유로 **Claude 웹(claude.ai)에서도 쓸 수 없습니다.** 브라우저에서 도는
+클라이언트는 내 PC의 프로그램을 실행할 수 없기 때문입니다.
 
-```powershell
-$env:PORT=8080; npm start    # Windows PowerShell
-```
+ChatGPT 계열에서는 **Codex CLI**만 로컬 MCP를 지원하므로, 그쪽을 쓰시면 됩니다.
+그 외에는 Claude Desktop이나 Claude Code를 권합니다. 설치가 간단하고 별표
+파일도 내 PC에 바로 저장됩니다.
 
-세 가지 방법이 있습니다.
-
-1. **직접 배포** (권장): Fly.io, Railway, Render 등에 올리고 그 URL을 등록합니다.
-   `PORT` 환경변수만 주면 되고, 데이터는 컨테이너 안에서 `npm run update-data`로 받습니다.
-2. **임시 터널**: 내 PC에서 띄운 뒤 `cloudflared tunnel --url http://localhost:8080`
-   같은 도구로 임시 공개 주소를 만듭니다. PC를 끄면 끊깁니다.
-3. **로컬 클라이언트 사용**: 웹 대신 Claude Desktop이나 Claude Code를 씁니다.
-   가장 간단하고, 별표 파일도 내 PC에 바로 저장됩니다.
-
-> 공개 주소로 띄우면 누구나 접근할 수 있습니다. 규정 데이터는 공개 정보지만,
-> 원본 시스템에 접속하는 `download_form`이 함께 열리므로 접근을 제한하거나
-> 신뢰할 수 있는 범위에서만 사용하세요.
+> 참고: 이 서버에는 `PORT`를 주면 HTTP로 뜨는 모드가 들어 있습니다. 직접
+> 호스팅해서 쓰고 싶은 경우를 위한 것이며, 공용 서버가 생기기 전까지 웹
+> 클라이언트 연결은 각자 배포해야 합니다. 공개 주소로 띄우면 원본 시스템에
+> 접속하는 `download_form`도 함께 열리므로 접근 제한을 두시기 바랍니다.
 
 ## 도구
 
@@ -210,7 +200,7 @@ npm run update-data
 | `SMU_CACHE_DIR` | 캐시 위치 (기본: `~/.cache/smu-rule-mcp`, Windows는 `%LOCALAPPDATA%`) |
 | `SMU_FORM_DIR` | 내려받은 별표를 놓을 위치 |
 | `SMU_DATA_URL` | 데이터 배포 URL을 직접 지정 |
-| `PORT` | 지정하면 stdio 대신 HTTP 서버로 실행 |
+| `PORT` | 지정하면 stdio 대신 HTTP 서버로 실행 (직접 호스팅용) |
 | `SMU_CRAWLER_DISABLED` | 수집기 킬 스위치 |
 
 ## 문제 해결
@@ -243,12 +233,13 @@ Node 22.5 미만이거나 플래그가 필요한 버전입니다. Node 24 이상
 
 | 항목 | 값 |
 |---|---|
-| 동시성 | 1 (직렬, 병렬 금지) |
-| 요청 간 지연 | 2s + 지터 0~1s (무거운 요청 3s + 0~2s) |
-| 재시도 | 5xx·타임아웃·네트워크 오류만 3회, 2→4→8s 지수 백오프 |
-| 429/503 | `Retry-After` 준수, 없으면 60s 대기 |
-| 서킷 브레이커 | 연속 5회 실패 또는 타임아웃 누적 3회 → 즉시 중단 |
-| 수집 시간대 | 02:00–05:00 KST |
+| 동시성 | 1 (직렬 처리, 병렬 요청 금지) |
+| 요청 간 지연 | 기본 2초, 전문·첨부 등 무거운 요청은 3초 |
+| 지연 무작위화 | 위 지연에 무작위 시간을 더함 (기본 최대 1초, 무거운 요청 최대 2초) |
+| 재시도 | 5xx·타임아웃·네트워크 오류만 3회, 대기 2초 → 4초 → 8초 |
+| 429/503 | `Retry-After` 준수, 없으면 60초 대기 |
+| 서킷 브레이커 | 연속 5회 실패 또는 타임아웃 누적 3회면 즉시 중단 |
+| 수집 시간대 | 매일 새벽 2시부터 5시까지 (KST) |
 | User-Agent | 저장소 주소를 포함한 정직한 UA (스푸핑 금지) |
 | 별표 파일 | **lazy**: 일괄 수집 금지, 요청 시 1건씩 받아 영구 캐시 |
 | 킬 스위치 | `SMU_CRAWLER_DISABLED` 환경변수 |
