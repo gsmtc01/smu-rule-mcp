@@ -12,7 +12,10 @@ CREATE TABLE IF NOT EXISTS regulations (
   obookid         TEXT,
   catid           TEXT,
   bookcode        TEXT,           -- 규정코드 (예: 1-0-1, 2-1-1)
-  bookcd          TEXT,           -- 정관 / 규정 / 시행세칙 / 내규
+  bookcd          TEXT,           -- 정관 / 규정 / 시행세칙 / 내규 (원본 값 그대로)
+  -- 제목 접미사로 보정한 분류. 원본 bookcd에 오분류가 있어 조회 필터는 이쪽을 쓴다
+  -- (예: "ESG연구소 규정"이 원본에서는 정관). 접미사로 판정할 수 없으면 bookcd와 같다.
+  bookcd_norm     TEXT,
   title           TEXT NOT NULL,
   revcd           TEXT,           -- 제정 / 개정 / 폐지
   revcha          INTEGER,        -- 개정 차수

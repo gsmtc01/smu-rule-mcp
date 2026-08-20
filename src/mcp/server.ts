@@ -12,6 +12,7 @@ import {
   getArticles,
   getMeta,
   getRegulation,
+  hasBookcdNorm,
   hasMissingSince,
   openDb,
   resolveDbPath,
@@ -40,12 +41,16 @@ const text = (s: string) => ({ content: [{ type: 'text' as const, text: s }] });
 /** 구판(개정으로 대체돼 원본 목록에서 사라진 판본)을 제외하는 조건. */
 const LIVE_ONLY = hasMissingSince(db) ? 'AND missing_since IS NULL' : '';
 
+/** 분류 열. 원본 bookcd에는 오분류가 있어 보정값을 쓴다(예전 캐시에는 없다). */
+const BOOKCD_COL = hasBookcdNorm(db) ? 'bookcd_norm' : 'bookcd AS bookcd_norm';
+
 function fmtRegulation(r: Regulation): string {
   const state = r.statecd === STATE.repealed ? '폐지' : '현행';
+  const kind = r.bookcd_norm ?? r.bookcd;
   const rev = r.revcha ? `${r.revcd ?? ''} ${r.revcha}차` : (r.revcd ?? '');
   return [
     `${r.title} [${r.bookcode ?? '-'}]`,
-    `  구분: ${r.bookcd ?? '-'} / ${state}`,
+    `  구분: ${kind ?? '-'} / ${state}`,
     `  ${rev.trim()} · 공포 ${r.promuldt ?? '-'} · 시행 ${r.startdt ?? '-'}`,
     `  소관: ${r.deptname ?? '-'}  (bookid: ${r.bookid})`,
   ].join('\n');
@@ -186,7 +191,8 @@ server.registerTool(
     const rows = asRows<Regulation>(
       db
         .prepare(
-          `SELECT bookid, bookcode, bookcd, title, revcd, revcha, statecd, promuldt, startdt, deptname
+          `SELECT bookid, bookcode, bookcd, ${BOOKCD_COL},
+                  title, revcd, revcha, statecd, promuldt, startdt, deptname
              FROM regulations
             WHERE statecd = ? AND promuldt IS NOT NULL ${LIVE_ONLY} ${since ? 'AND promuldt >= ?' : ''}
             ORDER BY promuldt DESC

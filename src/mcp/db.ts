@@ -41,6 +41,8 @@ export interface Regulation {
   bookid: string;
   bookcode: string | null;
   bookcd: string | null;
+  /** 제목 접미사로 보정한 분류. 표시와 종류 필터는 이 값을 쓴다. */
+  bookcd_norm?: string | null;
   title: string;
   revcd: string | null;
   revcha: number | null;
@@ -65,21 +67,47 @@ export interface ArticleHit {
 export const STATE = { current: '5000', repealed: '6000' } as const;
 
 /**
- * missing_since 열 유무.
+ * regulations의 열 유무.
  *
- * 스키마 2에서 추가됐다. 사용자의 캐시가 그 이전 배포본일 수 있으므로,
- * 질의를 조립하기 전에 확인한다. 없으면 구판 필터를 걸지 않는다
- * (그 DB에는 구판 표시 자체가 없으므로 예전과 같이 동작한다).
+ * missing_since는 스키마 2, bookcd_norm은 스키마 3에서 추가됐다. 사용자의 캐시가
+ * 그 이전 배포본일 수 있으므로 질의를 조립하기 전에 확인하고, 없으면 그 열에
+ * 기대는 동작을 빼서 예전과 같이 처리한다.
  * 프로세스당 DB는 하나이고 실행 중 스키마가 바뀌지 않으므로 한 번만 조회한다.
  */
-let missingSinceColumn: boolean | undefined;
-export function hasMissingSince(db: DatabaseSync): boolean {
-  if (missingSinceColumn === undefined) {
+let regulationColumns: Set<string> | undefined;
+function hasColumn(db: DatabaseSync, name: string): boolean {
+  if (regulationColumns === undefined) {
     const cols = db.prepare('PRAGMA table_info(regulations)').all() as { name: string }[];
-    missingSinceColumn = cols.some((c) => c.name === 'missing_since');
+    regulationColumns = new Set(cols.map((c) => c.name));
   }
-  return missingSinceColumn;
+  return regulationColumns.has(name);
 }
+
+/** 구판 표시 열(스키마 2). */
+export function hasMissingSince(db: DatabaseSync): boolean {
+  return hasColumn(db, 'missing_since');
+}
+
+/** 분류 보정 열(스키마 3). */
+export function hasBookcdNorm(db: DatabaseSync): boolean {
+  return hasColumn(db, 'bookcd_norm');
+}
+
+/**
+ * 종류 필터에 쓸 열 이름.
+ *
+ * 원본 bookcd에는 오분류가 있어(현행 301건 중 9건) 보정값 bookcd_norm을 쓴다.
+ * 그 열이 없는 예전 캐시에서는 원본 값으로 되돌아간다.
+ */
+function bookcdColumn(db: DatabaseSync): string {
+  return hasColumn(db, 'bookcd_norm') ? 'bookcd_norm' : 'bookcd';
+}
+
+/** 조회 결과에 실을 분류 열. 예전 캐시에서는 원본 값을 그대로 보여 준다. */
+const bookcdSelect = (db: DatabaseSync, prefix = ''): string =>
+  hasColumn(db, 'bookcd_norm')
+    ? `${prefix}bookcd_norm`
+    : `${prefix}bookcd AS bookcd_norm`;
 
 /**
  * node:sqlite는 결과를 Record<string, SQLOutputValue>로 돌려주므로
@@ -108,7 +136,7 @@ export function searchArticles(
     extra.push(opts.state);
   }
   if (opts.bookcd) {
-    filters.push('r.bookcd = ?');
+    filters.push(`r.${bookcdColumn(db)} = ?`);
     extra.push(opts.bookcd);
   }
   // 개정으로 대체된 구판은 기본적으로 뺀다. 두면 3년 묵은 조문이 현행처럼 섞인다.
@@ -171,14 +199,15 @@ export function findRegulations(
     args.push(opts.state);
   }
   if (opts.bookcd) {
-    conds.push('bookcd = ?');
+    conds.push(`${bookcdColumn(db)} = ?`);
     args.push(opts.bookcd);
   }
   if (!opts.includeSuperseded && hasMissingSince(db)) conds.push('missing_since IS NULL');
 
   return asRows<Regulation>(db
     .prepare(
-      `SELECT bookid, bookcode, bookcd, title, revcd, revcha, statecd, promuldt, startdt, deptname
+      `SELECT bookid, bookcode, bookcd, ${bookcdSelect(db)},
+              title, revcd, revcha, statecd, promuldt, startdt, deptname
          FROM regulations
         ${conds.length ? 'WHERE ' + conds.join(' AND ') : ''}
         ORDER BY ordsort, bookcode
@@ -192,8 +221,8 @@ export function getRegulation(db: DatabaseSync, bookid: string): Regulation | un
   const col = hasMissingSince(db) ? 'missing_since' : 'NULL AS missing_since';
   return db
     .prepare(
-      `SELECT bookid, bookcode, bookcd, title, revcd, revcha, statecd, promuldt, startdt, deptname,
-              ${col}
+      `SELECT bookid, bookcode, bookcd, ${bookcdSelect(db)},
+              title, revcd, revcha, statecd, promuldt, startdt, deptname, ${col}
          FROM regulations WHERE bookid = ?`,
     )
     .get(bookid) as Regulation | undefined;

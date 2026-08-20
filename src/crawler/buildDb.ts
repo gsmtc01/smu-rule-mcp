@@ -20,11 +20,28 @@ const ROOT = resolve(__dirname, '../..');
 const DB_PATH = process.env.SMU_DB_PATH ?? resolve(ROOT, 'data/smu-rule.sqlite');
 const SCHEMA_PATH = resolve(__dirname, '../db/schema.sql');
 
-const SCHEMA_VERSION = '2';
+const SCHEMA_VERSION = '3';
 const CRAWLER_VERSION = '1.0.0';
 
 function log(msg: string): void {
   console.error(`[${new Date().toISOString()}] ${msg}`);
+}
+
+/**
+ * 제목 접미사로 규정 종류를 보정한다.
+ *
+ * 원본의 bookcd에는 오분류가 있다. "ESG연구소 규정"·"마이크로전공에 관한 시행세칙"이
+ * 정관으로, "상명대학교산학협력단 정관"이 규정으로 등록돼 있는 식이다(현행 301건 중 9건).
+ * 규칙성이 없어 원본 입력 오류로 보이며, 그대로 두면 type 필터가 조용히 어긋난다.
+ *
+ * 원본 값은 bookcd에 그대로 남기고 보정값을 따로 둔다. 판정 근거는 제목 접미사뿐이며,
+ * "학칙"·"학생 준칙"·"동문회 회칙"처럼 접미사가 네 종류에 없으면 원본 값을 그대로 쓴다.
+ */
+const BOOKCD_SUFFIXES = ['시행세칙', '내규', '정관', '규정'] as const;
+
+function normalizeBookcd(title: string, bookcd: string | null): string | null {
+  const t = title.trim();
+  return BOOKCD_SUFFIXES.find((s) => t.endsWith(s)) ?? bookcd;
 }
 
 const num = (v: unknown): number | null => {
@@ -68,10 +85,32 @@ function openDb(): DatabaseSync {
  */
 function migrate(db: DatabaseSync): void {
   const cols = db.prepare(`PRAGMA table_info(regulations)`).all() as { name: string }[];
-  if (!cols.some((c) => c.name === 'missing_since')) {
+  const has = (name: string) => cols.some((c) => c.name === name);
+
+  if (!has('missing_since')) {
     db.exec(`ALTER TABLE regulations ADD COLUMN missing_since TEXT`);
     log('스키마 마이그레이션: regulations.missing_since 추가');
   }
+
+  if (!has('bookcd_norm')) {
+    db.exec(`ALTER TABLE regulations ADD COLUMN bookcd_norm TEXT`);
+    log('스키마 마이그레이션: regulations.bookcd_norm 추가');
+  }
+  // 이번 목록에 없는 행(구판)은 upsert가 건드리지 않으므로 여기서 함께 채운다.
+  backfillBookcdNorm(db);
+}
+
+function backfillBookcdNorm(db: DatabaseSync): void {
+  const rows = db
+    .prepare(`SELECT bookid, title, bookcd FROM regulations WHERE bookcd_norm IS NULL`)
+    .all() as { bookid: string; title: string; bookcd: string | null }[];
+  if (rows.length === 0) return;
+
+  transaction(db, () => {
+    const upd = db.prepare(`UPDATE regulations SET bookcd_norm = ? WHERE bookid = ?`);
+    for (const r of rows) upd.run(normalizeBookcd(r.title, r.bookcd), r.bookid);
+  });
+  log(`분류 보정: ${rows.length}건 채움`);
 }
 
 function transaction(db: DatabaseSync, fn: () => void): void {
@@ -87,11 +126,13 @@ function transaction(db: DatabaseSync, fn: () => void): void {
 
 function upsertRegulation(db: DatabaseSync, r: RegulationRow, fetchedAt: string): void {
   db.prepare(
-    `INSERT INTO regulations (bookid, obookid, catid, bookcode, bookcd, title, revcd, revcha,
-       statecd, promuldt, startdt, deptname, noformyn, ordsort, statehistoryid, fetched_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO regulations (bookid, obookid, catid, bookcode, bookcd, bookcd_norm, title,
+       revcd, revcha, statecd, promuldt, startdt, deptname, noformyn, ordsort, statehistoryid,
+       fetched_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(bookid) DO UPDATE SET
-       title=excluded.title, revcd=excluded.revcd, revcha=excluded.revcha,
+       title=excluded.title, bookcd_norm=excluded.bookcd_norm,
+       revcd=excluded.revcd, revcha=excluded.revcha,
        statecd=excluded.statecd, promuldt=excluded.promuldt, startdt=excluded.startdt,
        deptname=excluded.deptname, ordsort=excluded.ordsort,
        statehistoryid=excluded.statehistoryid, fetched_at=excluded.fetched_at,
@@ -103,6 +144,7 @@ function upsertRegulation(db: DatabaseSync, r: RegulationRow, fetchedAt: string)
     r.catid ?? null,
     r.bookcode ?? null,
     r.bookcd ?? null,
+    normalizeBookcd(r.title, r.bookcd ?? null),
     r.title,
     r.revcd ?? null,
     num(r.revcha),
