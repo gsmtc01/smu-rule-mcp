@@ -23,7 +23,11 @@ CREATE TABLE IF NOT EXISTS regulations (
   noformyn        TEXT,           -- Y이면 비정형(regul_board_noForm.jsp)
   ordsort         INTEGER,
   statehistoryid  TEXT,           -- 개정판 식별자. 전문 캐시 무효화 기준.
-  fetched_at      TEXT NOT NULL
+  fetched_at      TEXT NOT NULL,
+  -- 원본 목록에서 사라진 시각. NULL이면 마지막 수집 시점의 목록에 있었다는 뜻.
+  -- 개정 시 새 bookid가 발급되면 옛 bookid는 목록에서 빠지는데 삭제 신호는
+  -- 오지 않는다. 그 구판을 현행과 구분하기 위한 표시다.
+  missing_since   TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_reg_state ON regulations(statecd);
@@ -91,4 +95,8 @@ CREATE TABLE IF NOT EXISTS meta (
   value TEXT
 );
 -- 기록 항목: schema_version, built_at, source_url, regulation_count,
---            form_count, crawler_version
+--            form_count, crawler_version, superseded_count
+--
+-- regulation_count는 원본 목록 기준 건수다. regulations 테이블 행 수는
+-- 구판(missing_since IS NOT NULL)을 포함하므로 그보다 클 수 있다.
+-- 두 값의 차이는 scripts/verifyDb.mjs가 배포 전에 대조한다.

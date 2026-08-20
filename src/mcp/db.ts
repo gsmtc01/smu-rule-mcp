@@ -48,6 +48,8 @@ export interface Regulation {
   promuldt: string | null;
   startdt: string | null;
   deptname: string | null;
+  /** 원본 목록에서 사라진 시각. 값이 있으면 개정으로 대체된 구판이다. */
+  missing_since?: string | null;
 }
 
 export interface ArticleHit {
@@ -63,6 +65,23 @@ export interface ArticleHit {
 export const STATE = { current: '5000', repealed: '6000' } as const;
 
 /**
+ * missing_since 열 유무.
+ *
+ * 스키마 2에서 추가됐다. 사용자의 캐시가 그 이전 배포본일 수 있으므로,
+ * 질의를 조립하기 전에 확인한다. 없으면 구판 필터를 걸지 않는다
+ * (그 DB에는 구판 표시 자체가 없으므로 예전과 같이 동작한다).
+ * 프로세스당 DB는 하나이고 실행 중 스키마가 바뀌지 않으므로 한 번만 조회한다.
+ */
+let missingSinceColumn: boolean | undefined;
+export function hasMissingSince(db: DatabaseSync): boolean {
+  if (missingSinceColumn === undefined) {
+    const cols = db.prepare('PRAGMA table_info(regulations)').all() as { name: string }[];
+    missingSinceColumn = cols.some((c) => c.name === 'missing_since');
+  }
+  return missingSinceColumn;
+}
+
+/**
  * node:sqlite는 결과를 Record<string, SQLOutputValue>로 돌려주므로
  * 선언한 행 타입으로 직접 단언할 수 없다. 캐스팅을 이 한 곳에 모은다.
  */
@@ -76,7 +95,7 @@ export const asRow = <T>(r: unknown): T | undefined => r as T | undefined;
 export function searchArticles(
   db: DatabaseSync,
   query: string,
-  opts: { limit?: number; state?: string; bookcd?: string } = {},
+  opts: { limit?: number; state?: string; bookcd?: string; includeSuperseded?: boolean } = {},
 ): ArticleHit[] {
   const limit = Math.min(opts.limit ?? 10, 50);
   const q = query.trim();
@@ -92,6 +111,8 @@ export function searchArticles(
     filters.push('r.bookcd = ?');
     extra.push(opts.bookcd);
   }
+  // 개정으로 대체된 구판은 기본적으로 뺀다. 두면 3년 묵은 조문이 현행처럼 섞인다.
+  if (!opts.includeSuperseded && hasMissingSince(db)) filters.push('r.missing_since IS NULL');
   const where = filters.length ? ` AND ${filters.join(' AND ')}` : '';
 
   if (q.length >= 3) {
@@ -124,7 +145,14 @@ export function searchArticles(
 
 export function findRegulations(
   db: DatabaseSync,
-  opts: { title?: string; dept?: string; state?: string; bookcd?: string; limit?: number },
+  opts: {
+    title?: string;
+    dept?: string;
+    state?: string;
+    bookcd?: string;
+    limit?: number;
+    includeSuperseded?: boolean;
+  },
 ): Regulation[] {
   const limit = Math.min(opts.limit ?? 50, 300);
   const conds: string[] = [];
@@ -146,6 +174,7 @@ export function findRegulations(
     conds.push('bookcd = ?');
     args.push(opts.bookcd);
   }
+  if (!opts.includeSuperseded && hasMissingSince(db)) conds.push('missing_since IS NULL');
 
   return asRows<Regulation>(db
     .prepare(
@@ -158,13 +187,28 @@ export function findRegulations(
     .all(...args, limit));
 }
 
+/** bookid로 직접 조회할 때는 구판도 돌려준다. 구판 여부는 missing_since로 알린다. */
 export function getRegulation(db: DatabaseSync, bookid: string): Regulation | undefined {
+  const col = hasMissingSince(db) ? 'missing_since' : 'NULL AS missing_since';
   return db
     .prepare(
-      `SELECT bookid, bookcode, bookcd, title, revcd, revcha, statecd, promuldt, startdt, deptname
+      `SELECT bookid, bookcode, bookcd, title, revcd, revcha, statecd, promuldt, startdt, deptname,
+              ${col}
          FROM regulations WHERE bookid = ?`,
     )
     .get(bookid) as Regulation | undefined;
+}
+
+/** 구판 건수. 없거나 열이 없으면 0. */
+export function countSuperseded(db: DatabaseSync): number {
+  if (!hasMissingSince(db)) return 0;
+  return Number(
+    (
+      db
+        .prepare('SELECT COUNT(*) AS n FROM regulations WHERE missing_since IS NOT NULL')
+        .get() as { n: number }
+    ).n,
+  );
 }
 
 export function getArticles(

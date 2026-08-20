@@ -20,7 +20,7 @@ const ROOT = resolve(__dirname, '../..');
 const DB_PATH = process.env.SMU_DB_PATH ?? resolve(ROOT, 'data/smu-rule.sqlite');
 const SCHEMA_PATH = resolve(__dirname, '../db/schema.sql');
 
-const SCHEMA_VERSION = '1';
+const SCHEMA_VERSION = '2';
 const CRAWLER_VERSION = '1.0.0';
 
 function log(msg: string): void {
@@ -55,7 +55,23 @@ function openDb(): DatabaseSync {
   mkdirSync(dirname(DB_PATH), { recursive: true });
   const db = new DatabaseSync(DB_PATH);
   db.exec(readFileSync(SCHEMA_PATH, 'utf8'));
+  migrate(db);
   return db;
+}
+
+/**
+ * 스키마 마이그레이션.
+ *
+ * 매 실행은 직전 배포본을 복원해 이어받으므로, schema.sql의
+ * CREATE TABLE IF NOT EXISTS만으로는 이미 만들어진 테이블에 새 열이 붙지 않는다.
+ * 여기서 직접 붙인다. schema.sql 쪽 정의는 새 DB를 만들 때 쓰인다.
+ */
+function migrate(db: DatabaseSync): void {
+  const cols = db.prepare(`PRAGMA table_info(regulations)`).all() as { name: string }[];
+  if (!cols.some((c) => c.name === 'missing_since')) {
+    db.exec(`ALTER TABLE regulations ADD COLUMN missing_since TEXT`);
+    log('스키마 마이그레이션: regulations.missing_since 추가');
+  }
 }
 
 function transaction(db: DatabaseSync, fn: () => void): void {
@@ -78,7 +94,9 @@ function upsertRegulation(db: DatabaseSync, r: RegulationRow, fetchedAt: string)
        title=excluded.title, revcd=excluded.revcd, revcha=excluded.revcha,
        statecd=excluded.statecd, promuldt=excluded.promuldt, startdt=excluded.startdt,
        deptname=excluded.deptname, ordsort=excluded.ordsort,
-       statehistoryid=excluded.statehistoryid, fetched_at=excluded.fetched_at`,
+       statehistoryid=excluded.statehistoryid, fetched_at=excluded.fetched_at,
+       -- 목록에 다시 나타났다면 구판 표시를 해제한다.
+       missing_since=NULL`,
   ).run(
     r.bookid,
     r.obookid ?? null,
@@ -148,6 +166,51 @@ function replaceArticles(db: DatabaseSync, bookid: string, title: string, html: 
   return articles.length;
 }
 
+function countSuperseded(db: DatabaseSync): number {
+  return Number(
+    (db.prepare(`SELECT COUNT(*) AS n FROM regulations WHERE missing_since IS NOT NULL`).get() as {
+      n: number;
+    }).n,
+  );
+}
+
+/**
+ * 목록에서 사라진 규정을 구판으로 표시한다.
+ *
+ * upsertRegulation이 목록에 있는 행마다 fetched_at을 이번 실행 시각으로 덮으므로,
+ * 그보다 오래된 행은 이번 목록에 없었던 것이다. 원본은 개정 시 새 bookid를 발급하고
+ * 옛 bookid를 목록에서 빼는데 삭제 신호는 주지 않는다. 표시하지 않고 두면 구판이
+ * statecd=5000(현행)인 채로 남아 검색·목록에 현행처럼 섞인다.
+ *
+ * 지우지는 않는다. 이 프로젝트는 폐지 규정도 이력으로 보존하며, bookid로 직접
+ * 조회하면 구판 전문도 계속 볼 수 있어야 한다.
+ */
+function markSuperseded(db: DatabaseSync, fetchedAt: string): void {
+  const stale = db
+    .prepare(
+      `SELECT bookid, title, revcha, promuldt FROM regulations
+        WHERE fetched_at < ? AND missing_since IS NULL`,
+    )
+    .all(fetchedAt) as {
+    bookid: string;
+    title: string;
+    revcha: number | null;
+    promuldt: string | null;
+  }[];
+
+  if (stale.length === 0) return;
+
+  transaction(db, () => {
+    const mark = db.prepare(`UPDATE regulations SET missing_since = ? WHERE bookid = ?`);
+    for (const s of stale) mark.run(fetchedAt, s.bookid);
+  });
+
+  log(`목록에서 사라진 규정 ${stale.length}건을 구판으로 표시`);
+  for (const s of stale) {
+    log(`  · ${s.title} (${s.bookid}, 개정 ${s.revcha ?? '?'}차 ${s.promuldt ?? '-'})`);
+  }
+}
+
 async function main(): Promise<void> {
   const force = process.argv.includes('--force');
   assertWithinWindow(force);
@@ -170,6 +233,8 @@ async function main(): Promise<void> {
   transaction(db, () => {
     for (const r of all) upsertRegulation(db, r, fetchedAt);
   });
+
+  markSuperseded(db, fetchedAt);
 
   // 2) 전문: 개정판이 바뀐 것만 받는다.
   const targets = all.filter((r) => needsText(db, r));
@@ -243,6 +308,7 @@ async function main(): Promise<void> {
   meta.run('source_url', 'https://rule.smu.ac.kr');
   meta.run('regulation_count', String(all.length));
   meta.run('form_count', String(forms.result.length));
+  meta.run('superseded_count', String(countSuperseded(db)));
 
   log(`완료. 요청 ${fetcher.stats.requests}회, DB: ${DB_PATH}`);
   db.close();

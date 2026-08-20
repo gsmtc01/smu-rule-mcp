@@ -7,10 +7,12 @@ import {
   STATE,
   asRow,
   asRows,
+  countSuperseded,
   findRegulations,
   getArticles,
   getMeta,
   getRegulation,
+  hasMissingSince,
   openDb,
   resolveDbPath,
   searchArticles,
@@ -34,6 +36,9 @@ const STALENESS = meta.built_at
   : '데이터 기준 시점 미상';
 
 const text = (s: string) => ({ content: [{ type: 'text' as const, text: s }] });
+
+/** 구판(개정으로 대체돼 원본 목록에서 사라진 판본)을 제외하는 조건. */
+const LIVE_ONLY = hasMissingSince(db) ? 'AND missing_since IS NULL' : '';
 
 function fmtRegulation(r: Regulation): string {
   const state = r.statecd === STATE.repealed ? '폐지' : '현행';
@@ -125,7 +130,12 @@ server.registerTool(
       if (arts.length === 0) return text(`${reg.title}에 ${article}이(가) 없습니다.`);
     }
 
-    const head = `${fmtRegulation(reg)}\n${STALENESS}`;
+    // bookid로 직접 지정하면 구판도 조회된다. 현행으로 오인하지 않도록 알린다.
+    const superseded = reg.missing_since
+      ? `\n⚠ 이 판본은 ${reg.missing_since.slice(0, 10)} 수집 시점부터 원본 목록에서 확인되지 않습니다. ` +
+        `개정으로 대체된 구판일 수 있습니다. 같은 이름으로 다시 조회하면 현행 판본이 나옵니다.`
+      : '';
+    const head = `${fmtRegulation(reg)}\n${STALENESS}${superseded}`;
     const body = arts.map((a) => a.body).join('\n\n');
     return text(`${head}\n\n${'─'.repeat(50)}\n\n${body}`);
   },
@@ -141,15 +151,20 @@ server.registerTool(
       dept: z.string().optional().describe('소관부서 부분 일치 (예: 학사운영팀)'),
       type: z.enum(['정관', '규정', '시행세칙', '내규']).optional(),
       include_repealed: z.boolean().optional().describe('폐지 규정 포함 (기본 false)'),
+      include_superseded: z
+        .boolean()
+        .optional()
+        .describe('개정으로 대체된 구판 포함 (기본 false)'),
       limit: z.number().int().min(1).max(300).optional(),
     },
   },
-  async ({ title, dept, type, include_repealed, limit }) => {
+  async ({ title, dept, type, include_repealed, include_superseded, limit }) => {
     const rows = findRegulations(db, {
       title,
       dept,
       bookcd: type,
       state: include_repealed ? undefined : STATE.current,
+      includeSuperseded: include_superseded,
       limit,
     });
     if (rows.length === 0) return text('조건에 맞는 규정이 없습니다.');
@@ -173,7 +188,7 @@ server.registerTool(
         .prepare(
           `SELECT bookid, bookcode, bookcd, title, revcd, revcha, statecd, promuldt, startdt, deptname
              FROM regulations
-            WHERE statecd = ? AND promuldt IS NOT NULL ${since ? 'AND promuldt >= ?' : ''}
+            WHERE statecd = ? AND promuldt IS NOT NULL ${LIVE_ONLY} ${since ? 'AND promuldt >= ?' : ''}
             ORDER BY promuldt DESC
             LIMIT ?`,
         )
@@ -305,11 +320,15 @@ server.registerTool(
   async () => {
     const n = (t: string) =>
       (db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get() as { n: number }).n;
+    const superseded = countSuperseded(db);
     return text(
       [
         `DB 경로: ${resolveDbPath()}`,
         `수집 시각: ${meta.built_at ?? '미상'}`,
-        `규정 ${n('regulations')}건 · 조문 ${n('articles')}건 · 별표/서식 ${n('forms')}건`,
+        `규정 ${n('regulations') - superseded}건 · 조문 ${n('articles')}건 · 별표/서식 ${n('forms')}건`,
+        ...(superseded > 0
+          ? [`구판 ${superseded}건 (개정으로 대체돼 목록에서 사라진 판본. 기본 조회에서 제외됨)`]
+          : []),
         `별표 캐시: ${cacheInfo().files}개 파일 (${(cacheInfo().bytes / 1024 / 1024).toFixed(1)} MB)`,
         '',
         '이 데이터는 수집 시점의 사본입니다. 법적 효력을 갖는 것은',

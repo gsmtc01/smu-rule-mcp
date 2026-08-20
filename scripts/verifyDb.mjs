@@ -26,8 +26,21 @@ if (!existsSync(DB_PATH)) {
 const db = new DatabaseSync(DB_PATH);
 const count = (t) => Number(db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get().n);
 
+// missing_since는 스키마 2에서 추가됐다. 이전 배포본을 검증할 수도 있으므로 확인 후 쓴다.
+const hasMissingSince = db
+  .prepare('PRAGMA table_info(regulations)')
+  .all()
+  .some((c) => c.name === 'missing_since');
+
+const superseded = hasMissingSince
+  ? Number(
+      db.prepare('SELECT COUNT(*) AS n FROM regulations WHERE missing_since IS NOT NULL').get().n,
+    )
+  : 0;
+
 const stats = {
   regulations: count('regulations'),
+  superseded,
   articles: count('articles'),
   forms: count('forms'),
   fts: count('articles_fts'),
@@ -45,6 +58,21 @@ const errors = [];
 for (const [k, min] of Object.entries(MIN)) {
   if (k === 'shrinkRatio') continue;
   if (stats[k] < min) errors.push(`${k} = ${stats[k]} (최소 ${min})`);
+}
+
+// 목록 기준 건수와 실제 행 수를 대조한다.
+//
+// 원본은 개정 시 새 bookid를 발급하고 옛 bookid를 목록에서 빼지만 삭제 신호는
+// 주지 않는다. 구판 표시(missing_since)가 제대로 붙지 않으면 옛 판본이 현행인 채로
+// 쌓여 검색에 섞이는데, 건수는 늘기만 하므로 shrinkRatio 검사로는 잡히지 않는다.
+if (hasMissingSince && meta.regulation_count) {
+  const live = stats.regulations - superseded;
+  const listed = Number(meta.regulation_count);
+  if (live !== listed) {
+    errors.push(
+      `행 수 불일치: 목록 ${listed}건인데 현행 행 ${live}건 (전체 ${stats.regulations} - 구판 ${superseded})`,
+    );
+  }
 }
 
 // 조문과 FTS 인덱스는 항상 1:1이어야 한다. 어긋나면 검색이 조용히 부정확해진다.
